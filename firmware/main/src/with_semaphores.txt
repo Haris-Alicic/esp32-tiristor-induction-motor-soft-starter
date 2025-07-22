@@ -1,0 +1,201 @@
+#include <Arduino.h>
+#include "sensors.hpp"
+#include "timer.hpp"
+
+//Hardware pin names
+const uint8_t protection_pin = 25;
+const uint8_t triac_1_pin = 19;
+
+const uint8_t voltage_amplitude_pin = 35;
+const uint8_t voltage_zero_cross_pin = 17;
+const uint8_t current_amplitude_pin = 34;
+const uint8_t current_zero_cross_pin = 18;
+
+//TIMERS
+//We use timer 2 and 3 because they are not used
+const uint8_t timer2 = 2;
+const uint8_t timer3 = 3;
+
+//Interrupt declarations
+void IRAM_ATTR voltageZeroCrossingInterrupt();
+void IRAM_ATTR currentZeroCrossingInterrupt();
+void IRAM_ATTR triacInterrupt();
+void IRAM_ATTR measurementInterrupt();
+
+//Interrupt flags
+volatile bool voltage_zero_crossing_interrupt[2] = {false, false };
+volatile bool current_zero_crossing_interrupt = false;
+volatile bool triac_interrupt = false;
+volatile bool measurement_interrupt = false;
+
+//Tasks
+// Define task handles
+TaskHandle_t triacTaskHandle;
+TaskHandle_t measurementTaskHandle;
+
+// Function prototypes for task functions
+void triacTask(void *pvParameters);
+void measurementTask(void *pvParameters);
+
+// Mutex to protect the shared variable
+SemaphoreHandle_t voltage_mutex;
+SemaphoreHandle_t current_mutex;
+SemaphoreHandle_t measurement_mutex;
+SemaphoreHandle_t triac_mutex;
+
+//Objects
+Sensor Voltage;
+Sensor Current;
+//CurrentSensor Current;
+Timer Timer2;
+Timer Timer3;
+SoftwareTimer SoftwareTimer1;
+SoftwareTimer SoftwareTimer2;
+
+void setup()
+{
+  //Serial comunication
+  Serial.begin(115200);
+  Serial.println("CPU Frequency: " + String(getCpuFrequencyMhz()));
+
+  //Measurement and sensors
+  Voltage.setup(voltage_amplitude_pin, voltage_zero_cross_pin, voltageZeroCrossingInterrupt);
+  Current.setup(current_amplitude_pin, current_zero_cross_pin, currentZeroCrossingInterrupt);
+  
+  //Hardware timers
+  Timer2.setup(timer2, measurementInterrupt, true);
+  Timer2.setDelay(1000);
+  Timer2.enable();
+
+  Timer3.setup(timer3, triacInterrupt, false);
+  Timer3.setDelay(8800);
+  Timer3.enable();
+
+  //Software timers
+  SoftwareTimer1.setup(2000000, true);
+  //SoftwareTimer2.setup(1000000, true);
+  
+  //Pin setup
+  pinMode(protection_pin, OUTPUT);
+  pinMode(triac_1_pin, OUTPUT);
+
+  digitalWrite(triac_1_pin, LOW);
+  digitalWrite(protection_pin, LOW);
+
+  // Create the tasks
+  xTaskCreatePinnedToCore(triacTask, "TriacTask", 10000, NULL, 2, &triacTaskHandle, 0);
+  xTaskCreatePinnedToCore(measurementTask, "MeasurementTask", 10000, NULL, 1, &measurementTaskHandle, 0);
+}
+
+uint16_t timer_delay = 10000;
+
+void loop()
+{
+  if(SoftwareTimer1.periodElapsed())
+  {
+    //Serial.println("Voltage: " + String(Voltage.rmsValue()));
+    //Serial.println("Current: " + String(Current.rmsValue()));
+  }
+  //printLoopFrequency();
+}
+
+//*************************************************************************************************
+//Interrupt definitions
+void IRAM_ATTR voltageZeroCrossingInterrupt(void)
+{
+  if (xSemaphoreTakeFromISR(voltage_mutex, NULL) == pdTRUE)
+  {
+    voltage_zero_crossing_interrupt[0] = true;
+    voltage_zero_crossing_interrupt[1] = true;
+    xSemaphoreGiveFromISR(voltage_mutex, NULL);
+  }
+  
+}
+
+void IRAM_ATTR currentZeroCrossingInterrupt(void)
+{
+  if (xSemaphoreTakeFromISR(current_mutex, NULL) == pdTRUE)
+  {
+    current_zero_crossing_interrupt = true;
+    xSemaphoreGiveFromISR(current_mutex, NULL);
+  }
+  
+}
+
+void IRAM_ATTR triacInterrupt()
+{
+  if (xSemaphoreTakeFromISR(triac_mutex, NULL) == pdTRUE)
+  {
+    triac_interrupt = true;
+    xSemaphoreGiveFromISR(triac_mutex, NULL);
+  }
+  
+}
+
+void IRAM_ATTR measurementInterrupt()
+{
+   if (xSemaphoreTakeFromISR(measurement_mutex, NULL) == pdTRUE)
+  {
+    measurement_interrupt = true;
+    xSemaphoreGiveFromISR(measurement_mutex, NULL);
+  }
+}
+
+//*************************************************************************************************
+//Task defininitions
+// Task function declarations
+void triacTask(void *pvParameters)
+{
+  while(true) 
+  {
+    if (xSemaphoreTake(voltage_mutex, portMAX_DELAY) == pdTRUE)
+    {
+      if(voltage_zero_crossing_interrupt[0])
+      {
+        digitalWrite(triac_1_pin, LOW);
+        Timer3.restart();
+        Timer3.enable();
+        voltage_zero_crossing_interrupt[0] = false;
+      }
+      xSemaphoreGive(voltage_mutex);
+    }
+
+    if (xSemaphoreTake(triac_mutex, portMAX_DELAY) == pdTRUE)
+    {
+      if(triac_interrupt)
+      {
+        digitalWrite(triac_1_pin, HIGH);
+        Timer3.disable();
+        triac_interrupt = false;
+      }
+      xSemaphoreGive(triac_mutex);
+    }
+  }
+}
+
+void measurementTask(void *pvParameters)
+{
+  while(true) 
+  {
+    if (xSemaphoreTake(voltage_mutex, portMAX_DELAY) == pdTRUE)
+    {
+      if(voltage_zero_crossing_interrupt[1])
+      {
+        Voltage.rmsCalculate();
+        voltage_zero_crossing_interrupt[1] = false;
+      }
+      xSemaphoreGive(voltage_mutex);
+    }
+
+    if (xSemaphoreTake(measurement_mutex, portMAX_DELAY) == pdTRUE)
+    {
+      if(measurement_interrupt)
+      {
+        Voltage.sample();
+        //Current.sample();
+        measurement_interrupt = false;
+      }
+      xSemaphoreGive(measurement_mutex);
+    }
+  }
+}

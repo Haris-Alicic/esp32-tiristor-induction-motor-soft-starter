@@ -1,0 +1,30 @@
+/******************************************************************************
+
+                              Online C++ Compiler.
+               Code, Compile, Run and Debug C++ program online.
+Write your code in this editor and press "Run" button to compile and execute it.
+
+*******************************************************************************/
+
+#include <iostream>
+#include <cmath>
+#include <limits>
+
+using namespace std;
+
+int main()
+{
+    double y = 0.0;
+    unsigned int counter = 1;
+    
+    for(float x = 0.0; x <= 1.0; x += 0.01)
+    {
+        y = sqrt((1 - x) + (sin(2*M_PI*x)/(2*M_PI)));
+        std::cout.precision(std::numeric_limits<float>::max_digits10);
+        cout << x << "\t\t" << y << endl;
+        counter++;
+    }
+    
+
+    return 0;
+}

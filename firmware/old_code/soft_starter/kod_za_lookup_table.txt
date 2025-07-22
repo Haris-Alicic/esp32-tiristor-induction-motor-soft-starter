@@ -1,0 +1,20 @@
+#include <iostream>
+#include <cmath>
+
+using namespace std;
+
+int main()
+{
+    double izlaz = 0.0;
+    unsigned int counter = 1;
+    
+    for(float count = 0; count <= 3.14159; count += 0.00314159)
+    {
+        izlaz = sqrt((1/(2*3.14159))*((3.14159 - count) + (sin(2*count))/2)) * sqrt(2);
+        cout <<count << "\t\t" << izlaz << endl;
+        counter++;
+    }
+    
+
+    return 0;
+}

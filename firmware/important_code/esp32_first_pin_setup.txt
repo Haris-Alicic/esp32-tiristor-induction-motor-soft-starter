@@ -1,0 +1,58 @@
+#include <Arduino.h>
+
+const uint8_t triac_1_pin = 19;
+const uint8_t voltage_amplitude_pin = 35;
+const uint8_t voltage_zero_cross_pin = 17;
+const uint8_t current_amplitude_pin = 34;
+const uint8_t current_zero_cross_pin = 18;
+
+//VOLATILE VARIABLES
+
+volatile bool current_zero_crossing = false;
+
+// put function declarations here:
+void voltageZeroCrossingInterrupt();
+void currentZeroCrossingInterrupt();
+
+//Classes
+class VoltageSensor
+{
+  private:
+  volatile bool voltage_zero_crossing = false;
+
+  public:
+  void measureVoltagePolarity(void);
+  
+}
+
+void setup()
+{
+  pinMode(voltage_amplitude_pin, INPUT);
+  pinMode(voltage_zero_cross_pin, INPUT);
+  pinMode(current_amplitude_pin, INPUT);
+  pinMode(current_zero_cross_pin, INPUT);
+  pinMode(triac_1_pin, OUTPUT);
+  digitalWrite(triac_1_pin, LOW);
+
+  //Attach interrupt
+  attachInterrupt(digitalPinToInterrupt(voltage_zero_cross_pin), voltageInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(voltage_zero_cross_pin), voltageInterrupt, CHANGE);
+}
+
+
+void loop()
+{
+  
+  
+}
+
+// put function definitions here:
+void voltageZeroCrossingInterrupt(void)
+{
+  voltage
+}
+
+void currenZeroCrossingInterrupt(void)
+{
+
+}
