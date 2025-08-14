@@ -1,0 +1,327 @@
+#include <Arduino.h>
+#include "tasks.hpp"
+#include "interrupts.hpp"
+#include "timer.hpp"
+#include "pin.hpp"
+#include "sensors.hpp"
+#include "multitask.hpp"
+#include "pid_controller.hpp"
+
+/*************************************************************************************************/
+//Global variables
+//GPIO pins
+const uint8_t voltage_amplitude_pin = 35;
+const uint8_t voltage_zero_crossing_pin = 17;
+const uint8_t current_amplitude_pin = 34;
+const uint8_t current_zero_crossing_pin = 18;
+
+const uint8_t protection_pin = 25;
+const uint8_t triac_1_pin = 19;
+const uint8_t triac_2_pin = 21;
+
+const uint8_t test_pin = 26;
+
+//TIMERS
+//We use timer 2 and 3 because they are not used
+const uint8_t timer2 = 2;
+const uint8_t timer3 = 3;
+
+/*************************************************************************************************/
+/*************************************************************************************************/
+//Pin objects
+Pin protectionPin;
+Pin testPin;
+
+//Interrupt
+//Interrupt objects
+Interrupt voltageZeroCrossingInterruptObject;
+Interrupt mainCurrentZeroCrossingInterruptObject;
+Interrupt auxCurrentZeroCrossingInterruptObject;
+
+//Interrupt function prototypes
+void IRAM_ATTR voltageZeroCrossingGpioInterruptFunction(void);
+void IRAM_ATTR mainCurrentZeroCrossingGpioInterruptFunction(void);
+void IRAM_ATTR auxCurrentZeroCrossingGpioInterruptFunction(void);
+
+/*************************************************************************************************/
+//Timers
+//Timer objects
+MultitaskTimerData measurementTimerDataObject;
+MultitaskTimer measurementTimerObject(measurementTimerDataObject);
+//Timer triacTimerInterruptObject;
+//Timer measurementTimerInterruptObject;
+
+//Timer function prototypes
+void IRAM_ATTR triacTimerInterruptFunction(void);
+void IRAM_ATTR measurementTimerInterruptFunction(void);
+
+/*************************************************************************************************/
+//Tasks
+//Task objects
+Tasks timerTaskObject;
+Tasks triacTaskObject;
+Tasks measurmementTaskObject;
+Tasks pidTaskObject;
+
+//Task function prototypes
+void timerTaskFunction(void* parameter);
+void triacTaskFunction(void* parameter);
+void measurementTaskFunction(void* parameter);
+void pidTaskFunction(void* parameter);
+
+/*************************************************************************************************/
+//Flags
+FlagPole voltageZeroCrossingFlagPole;
+Flag voltageZeroCrossingInterruptFlag(voltageZeroCrossingFlagPole);
+
+FlagPole currentZeroCrossingFlagPole;
+Flag currentZeroCrossingInterruptFlag(currentZeroCrossingFlagPole);
+
+FlagPole triacTimerFlagPole;
+Flag triacTimerFlag(triacTimerFlagPole);
+
+FlagPole measurementTimerFlagPole;
+Flag measurementTimerFlag(measurementTimerFlagPole);
+
+/*************************************************************************************************/
+//Data sharing objects
+DataStore<uint16_t> rmsVoltageValueDataStore;
+DataReader<uint16_t> rmsVoltageValueDataReader(rmsVoltageValueDataStore);
+
+DataStore<uint16_t> averageRmsVoltageValueDataStore;
+DataReader<uint16_t> averageRmsVoltageValueDataReader(averageRmsVoltageValueDataStore);
+
+DataStore<uint16_t> rmsCurrentValueDataStore;
+DataReader<uint16_t> rmsCurrentValueDataReader(rmsCurrentValueDataStore);
+
+DataStore<uint16_t> averageRmsCurrentValueDataStore;
+DataReader<uint16_t> averageRmsCurrentValueDataReader(averageRmsCurrentValueDataStore);
+
+DataStore<uint16_t> pidDataStore;
+DataReader<uint16_t> pidDataReader(pidDataStore);
+
+/*************************************************************************************************/
+/*************************************************************************************************/
+//Arduino setup and loop functions
+void setup()
+{
+  /*********************************************/
+  //Pin setup
+  protectionPin.setup(protection_pin, OUTPUT, LOW);
+  testPin.setup(test_pin, OUTPUT, LOW);
+
+  //Interrupt setup
+  //voltageZeroCrossingInterruptObject.setup(voltage_zero_crossing_pin, voltageZeroCrossingGpioInterruptFunction, CHANGE);
+  //mainCurrentZeroCrossingInterruptObject.setup(current_zero_crossing_pin, mainCurrentZeroCrossingGpioInterruptFunction, CHANGE);
+  //auxCurrentZeroCrossingInterruptObject.setup(current_zero_crossing_pin, auxCurrentZeroCrossingGpioInterruptFunction, CHANGE);
+  
+  //Timer setup
+  //triacTimerInterruptObject.setup(timer3, triacTimerInterruptFunction, false);
+  //triacTimerInterruptObject.setDelay(9500);
+
+  //measurementTimerInterruptObject.setup(timer2, measurementTimerInterruptFunction, true);
+  //measurementTimerInterruptObject.setDelay(500);
+  //measurementTimerInterruptObject.enable();
+  
+  //Task setup
+  timerTaskObject.setup(timerTaskFunction, "timerTask", 5, 0);
+  //triacTaskObject.setup(triacTaskFunction, "triacTask", 7, 0);
+  measurmementTaskObject.setup(measurementTaskFunction, "measurementTask", 6, 0);
+  //pidTaskObject.setup(pidTaskFunction, "pidTask", 8, 0);
+
+  /*********************************************/
+  //Serial comunication setup
+  Serial.begin(115200);
+  Serial.println("Motor soft starter");
+}
+
+void loop()
+{
+  //Serial.println("RMS Voltage: " + String(averageRmsVoltageValueDataReader.read()));
+  //Serial.println("RMS Current: " + String(averageRmsCurrentValueDataReader.read()));
+  //Serial.println("PID: " + String(pidDataReader.read()));
+  //delay(1000);
+}
+
+/*************************************************************************************************/
+/*************************************************************************************************/
+//GPIO interrupt functions
+//Voltage zero crossing interrupt function
+void IRAM_ATTR voltageZeroCrossingGpioInterruptFunction(void)
+{
+  voltageZeroCrossingInterruptFlag.set();
+  BaseType_t voltage_zero_crossing_gpio_interrupt_notification = pdFALSE;
+  vTaskNotifyGiveFromISR(triacTaskObject.getHandle(), &voltage_zero_crossing_gpio_interrupt_notification);
+  vTaskNotifyGiveFromISR(measurmementTaskObject.getHandle(), &voltage_zero_crossing_gpio_interrupt_notification);
+  vTaskNotifyGiveFromISR(pidTaskObject.getHandle(), &voltage_zero_crossing_gpio_interrupt_notification);
+  portYIELD_FROM_ISR();
+}
+
+//Main current zero crossing interrupt function
+void IRAM_ATTR mainCurrentZeroCrossingGpioInterruptFunction(void)
+{
+  currentZeroCrossingInterruptFlag.set();
+  BaseType_t current_zero_crossing_gpio_interrupt_notification = pdFALSE;
+  vTaskNotifyGiveFromISR(measurmementTaskObject.getHandle(), &current_zero_crossing_gpio_interrupt_notification);
+  portYIELD_FROM_ISR();
+}
+
+//Aux current zero crossing interrupt function
+void IRAM_ATTR auxCurrentZeroCrossingGpioInterruptFunction(void)
+{
+  currentZeroCrossingInterruptFlag.set();
+  BaseType_t current_zero_crossing_gpio_interrupt_notification = pdFALSE;
+  vTaskNotifyGiveFromISR(measurmementTaskObject.getHandle(), &current_zero_crossing_gpio_interrupt_notification);
+  portYIELD_FROM_ISR();
+}
+
+/*************************************************************************************************/
+//Timer interrupt functions
+//Triac timer interrupt function
+/*void IRAM_ATTR triacTimerInterruptFunction(void)
+{
+  triacTimerFlag.set();
+  BaseType_t triac_timer_interrupt_notification = pdFALSE;
+  vTaskNotifyGiveFromISR(triacTaskObject.getHandle(), &triac_timer_interrupt_notification);
+  portYIELD_FROM_ISR();
+}
+
+//Measurement timer interrupt function
+void IRAM_ATTR measurementTimerInterruptFunction(void)
+{
+  measurementTimerFlag.set();
+  BaseType_t measurement_timer_interrupt_notification = pdFALSE;
+  vTaskNotifyGiveFromISR(measurmementTaskObject.getHandle(), &measurement_timer_interrupt_notification);
+  portYIELD_FROM_ISR();
+}*/
+
+/*************************************************************************************************/
+//Task functions
+//Timer task function
+void timerTaskFunction(void* parameter)
+{
+  MultitaskTimer measurementTimerObject(measurementTimerDataObject);
+  measurementTimerObject.setPeriod(500);
+  measurementTimerObject.setAutoReload(true);
+  measurementTimerObject.start();
+  while(true)
+  {
+    if(measurementTimerObject.periodElapsed())
+    {
+      measurementTimerFlag.set();
+      xTaskNotifyGive(measurmementTaskObject.getHandle());
+    }
+  }
+}
+
+//Triac task function
+void triacTaskFunction(void* parameter)
+{
+  Pin triac1Pin;
+  Pin triac2Pin;
+
+  triac1Pin.setup(triac_1_pin, OUTPUT, LOW);
+  triac2Pin.setup(triac_2_pin, OUTPUT, LOW);
+
+  Flag voltageZeroCrossingTaksFlag(voltageZeroCrossingFlagPole);
+  Flag triacTimerTaskFlag(triacTimerFlagPole);
+
+  DataReader<uint16_t> pidTaskDataReader(pidDataStore);
+  
+  while(true)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if(voltageZeroCrossingTaksFlag.get())
+    {
+      triac1Pin.setLow();
+      //triac2Pin.setLow();
+      //triacTimerInterruptObject.setDelay(pidTaskDataReader.read());
+      //triacTimerInterruptObject.restart();
+      //triacTimerInterruptObject.enable();
+    }
+    else if(triacTimerTaskFlag.get())
+    {
+      triac1Pin.setHigh();
+      //triac2Pin.setHigh();
+      //triacTimerInterruptObject.disable();
+    }
+  }
+}
+
+//Measurement task function
+void measurementTaskFunction(void* parameter)
+{
+  /*
+  //Sensors
+  Sensor voltageSensor;
+  Sensor currentSensor;
+
+  //Sensor setup
+  voltageSensor.setup(voltage_amplitude_pin, voltage_zero_crossing_pin);
+  currentSensor.setup(current_amplitude_pin, current_zero_crossing_pin);
+*/
+  Flag measurementTimerTaskFlag(measurementTimerFlagPole);
+  Flag voltageZeroCrossingTaksFlag(voltageZeroCrossingFlagPole);
+  Flag currentZeroCrossingTaksFlag(currentZeroCrossingFlagPole);
+/*
+  DataWriter<uint16_t> rmsVoltageValueTaskDataWriter(rmsVoltageValueDataStore);
+  DataWriter<uint16_t> averageVoltageValueTaskDataWriter(averageRmsVoltageValueDataStore);
+  DataWriter<uint16_t> rmsCurrentValueTaskDataWriter(rmsCurrentValueDataStore);
+  DataWriter<uint16_t> averageCurrentValueTaskDataWriter(averageRmsCurrentValueDataStore);
+*/
+  //uint16_t voltage_zero_crossing_counter = 0;
+  while(true)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if(measurementTimerTaskFlag.get())
+    {
+      testPin.toggle();
+      //voltageSensor.sampleAndHold();
+      //currentSensor.sampleAndHold();
+    }
+    /*
+    if(voltageZeroCrossingTaksFlag.get())
+    {
+      voltageSensor.rmsCalculate();
+      rmsVoltageValueTaskDataWriter.write(voltageSensor.getRmsValue());
+      voltage_zero_crossing_counter++;
+
+      if(voltage_zero_crossing_counter == 50)
+      {
+        averageVoltageValueTaskDataWriter.write(voltageSensor.getAverageRmsValue());
+        averageCurrentValueTaskDataWriter.write(currentSensor.getAverageRmsValue());
+        voltage_zero_crossing_counter = 0;
+      }
+    }
+    if(currentZeroCrossingTaksFlag.get())
+    {
+      currentSensor.rmsCalculate();
+      rmsCurrentValueTaskDataWriter.write(currentSensor.getRmsValue());
+    }*/
+  }
+}
+
+//PID task function
+void pidTaskFunction(void* parameter)
+{
+  Flag voltageZeroCrossingTaksFlag(voltageZeroCrossingFlagPole);
+
+  DataReader<uint16_t> rmsCurrentValueTaskDataReader(rmsCurrentValueDataStore);
+  DataWriter<uint16_t> pidTaskDataWriter(pidDataStore);
+
+  PID_Controller pidController;
+
+  pidController.setupRange(9500, 0, 9500, true);
+  pidController.setupCoefficients(2000, 0, 0, 1000);
+  pidController.setDesiredValue(180);
+  while(true)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if(voltageZeroCrossingTaksFlag.get())
+    {
+      pidController.takeMeasuredValue((uint16_t)rmsCurrentValueTaskDataReader.read());
+      pidController.calculate();
+      pidTaskDataWriter.write(pidController.giveOutputValue());
+    }
+  }
+}
